@@ -1,0 +1,402 @@
+---
+title: "COVID-19 STA 141A Project"
+name: Benjamin Sionit
+date: "2/18/2022"
+SSID: 917470105
+output: html_document
+
+---
+
+
+
+
+
+```{r}
+library(plotly)
+library(tidyverse)
+library(ggpubr)
+library(dplyr)
+library(glmnet)
+library(MASS)
+library(caret)
+library(class)
+library(hrbrthemes)
+library(viridis)
+library(plotly)
+library(countrycode)
+library(rvest)
+library(reshape2)
+library(car)
+library(lmtest)
+library(broom)
+library(rstatix)
+library(rgl)
+```
+
+
+
+
+
+
+```{r}
+CovidWHO <- read_csv("https://covid19.who.int/WHO-COVID-19-global-data.csv")
+VaccineCovid <- read_csv("https://covid19.who.int/who-data/vaccination-data.csv")
+CovidWHO_2021_03_01 <- filter(CovidWHO, Date_reported == "2021-03-01")
+CovidWHO_2022_03_01 <- filter(CovidWHO, Date_reported == "2022-03-01")
+One_Year_Cum <- data.frame(CovidWHO_2021_03_01$Country, CovidWHO_2021_03_01$WHO_region, CovidWHO_2022_03_01$Cumulative_cases - CovidWHO_2021_03_01$Cumulative_cases, CovidWHO_2022_03_01$Cumulative_deaths - CovidWHO_2021_03_01$Cumulative_deaths)
+names(One_Year_Cum)[1] <- 'COUNTRY'
+names(One_Year_Cum)[2] <- 'WHO_REGION'
+names(One_Year_Cum)[3] <- 'CaseCum'
+names(One_Year_Cum)[4] <- 'DeathCum'
+
+
+One_Year_Cum
+VaccineCovid
+NewCovid <- as.data.frame(inner_join(One_Year_Cum, VaccineCovid))
+
+
+library(readxl)
+url <- "https://hdr.undp.org/sites/default/files/2020_statistical_annex_table_3.xlsx"
+destfile <- "X2020_statistical_annex_table_3.xlsx"
+curl::curl_download(url, destfile)
+X2020_statistical_annex_table_3 <- read_excel(destfile, 
+    col_types = c("skip", "text", "text", 
+        "numeric", "text", "numeric", "text", 
+        "numeric", "text", "text", "text", 
+        "numeric", "text", "text", "text", 
+        "numeric", "text", "text", "text", 
+        "numeric", "text", "text", "text", 
+        "numeric", "text", "text", "text", 
+        "text", "text", "text", "text", "text"), 
+    skip = 2)
+X2020_statistical_annex_table_3 <- as.data.frame(X2020_statistical_annex_table_3[-1:-3,-5:-31])
+X2020_statistical_annex_table_3 <- as.data.frame(X2020_statistical_annex_table_3[,-3])
+X2020_statistical_annex_table_3 <- as.data.frame(X2020_statistical_annex_table_3[-193:-261,])
+
+
+X2020_statistical_annex_table_3[,1] <- countrycode(X2020_statistical_annex_table_3[,1], origin = 'country.name', destination = 'iso3c')
+NewCovid[,1] <- countrycode(NewCovid[,1], origin = 'country.name', destination = 'iso3c')
+colnames(X2020_statistical_annex_table_3) <- c("COUNTRY","HDI","IneqHDI")
+
+WikiPop <- read_html("https://en.wikipedia.org/wiki/List_of_countries_by_population_(United_Nations)")
+PopTable = html_node(WikiPop, ".wikitable")
+PopTable = html_table(PopTable, fill = TRUE) 
+PopTable <- as.data.frame(PopTable)
+PopTable[,1] <- countrycode(PopTable[,1], origin = 'country.name', destination = 'iso3c')
+names(PopTable)[1] <- 'COUNTRY'
+ 
+NewCovid <-inner_join(X2020_statistical_annex_table_3, NewCovid)
+NewCovid <- na.omit(inner_join(PopTable, NewCovid))
+NewCovid[,1] <- countrycode(NewCovid[,1], origin = 'iso3c', destination = 'country.name')
+NewCovid$HDI <- as.numeric(NewCovid$HDI)
+NewCovid$IneqHDI <- as.numeric(NewCovid$IneqHDI)
+NewCovid <- NewCovid[,-2:-4]
+NewCovid <- NewCovid[,-3]
+names(NewCovid)[2] <- 'Population'
+NewCovid$Population <- as.numeric(gsub(",","",NewCovid$Population))
+```
+
+The data set(s) are from the World Health Organization's Database,Wikipedia, and the United Nations Development Programme.
+
+CovidWHO is the covid global data, and has the Date Reported, Country Code, Name of Country, WHO Region, New cases, Cumulative cases,New deaths, and Cumulative deaths.
+
+One_Year_Cum has Country Name, WHO Region, Cumulative Cases between March 1st 2021 and 2022, and  Cumulative Deaths between March 1st 2021 and 2022
+
+VaccineCovid has Country, ISO3 code for each country, WHO Region, Source of Data, Date Updated, Total vaccinations, Persons vaccinated with one or more dose, Persons Total vaccinated out of 100, Persons vaccinated with one or more dose out of 100, Persons fully vaccinated, Persons fully vaccinated out of 100, Vaccine types used, First vaccination Date, and types of vaccination used.
+
+X2020_statistical_annex_table_3 has Country name, HDI and HDI adjusted for Inequality for 2020. 
+
+PopTable has Country (IS03), UN Continental Region, UN Statistical Region, Population for each country as of July 1st 2018,  Population for each country as of July 1st 2019, and Percent change of population between those two years.
+
+```{r}
+NormalizedCases <- NewCovid$CaseCum/NewCovid$Population*100000
+NormalizedDeaths <- NewCovid$DeathCum/NewCovid$Population*100000
+CaseMortalityRate <- (NormalizedDeaths/NormalizedCases)*100
+
+NewCovid2<- na.omit(data.frame(NewCovid$COUNTRY, NewCovid$WHO_REGION, NormalizedCases, NormalizedDeaths, CaseMortalityRate, NewCovid$HDI,NewCovid$PERSONS_FULLY_VACCINATED_PER100, NewCovid$Population))
+names(NewCovid2)[1] <- 'COUNTRY'
+names(NewCovid2)[2] <- 'WHO_REGION'
+names(NewCovid2)[3] <- 'NormCase'
+names(NewCovid2)[4] <- 'NormDeath'
+names(NewCovid2)[5] <- 'CaseMortalityRate'
+names(NewCovid2)[6] <- 'HDI'
+names(NewCovid2)[7] <- 'FullyVac100'
+names(NewCovid2)[8] <- 'Pop'
+View(NewCovid2)
+
+```
+
+To create an organized dataset for the purpose of modelling, I coerced the datasets I described into NewCovid2, with the variables Country, WHO Region, Normalized Cases (Cumulative Cases per 100000 people) between March 1st 2021 and March 1st 2022, Normalized Deaths (Cumulative Deaths per 100000 people) between March 1st 2021 and March 1st 2022,
+
+
+The Corona virus Pandemic has been going on since March 2020, and has led to numerous lock downs worldwide and safety precautions being put in place for the last two years, and has eased due to Covid-19 vaccinations being rolled out,distancing measures, and mask mandates. 
+
+The vaccine roll out in most countries was a year after the pandemic has started, namely around Early March. This report will attempt to give answers to questions such as: how much variance does the HDI and Persons fully vaccinated (out of 100) explain for case mortality? What model captures this relationship best, and is there a difference of case mortality between each WHO Region?
+
+**EXPLORATION OF DATASET**
+
+
+To explore the dataset, I will generate summary statistics for the Variables in NewCovid2 globally as below: 
+```{r}
+summary(NewCovid2)
+```
+
+Overall globally, there are 178 different countries in my Data Set. 
+
+For the variable Normalized Cases, the minimum was 6, 1st Quartile was 590 cases, Mean was 56697 cases, 3rd Quartile was 12234 and Maximum was 8547567 (all out of 100000 persons).
+
+For the variable Normalized Deaths, the minimum was 0, 1st Quartile was 8.733 deaths, Mean was 188.448 deaths, 3rd Quartile was 93.262 and Maximum was 21854.881  (all out of 100000 persons).
+ 
+For Case Mortality Rate, the minimum was 0%, 1st Quartile was  0.4374%, Mean was 1.3786%, 3rd Quartile was 1.8180%,  and maximum was 15.8194%. 
+
+For HDI, the minimum was 0.3940, the 1st Quartile was 0.6012, the Mean was 0.7229, 3rd Quartile was 0.8433, and maximum was 0.9570. 
+
+For Full Vaccinations, the minimum was .08, 1st Quartile was 22.67, Mean was 47.54, 3rd Quartile was 71.01, and maximum was 97.25 (all out of 100 persons).
+
+
+**MODEL EXPLORATION: CASE MORTALITY RATE versus HDI and PERSONS FULLY VACCINATED (out of 100)**
+
+To begin, I will fit a linear model of case mortality rate against HDI and persons fully vaccinated (out of 100). The assumptions for this model that must be satisfied are normality, homoscedasticity (if there is equal variance in the standardized residuals), if the errors are independent (no Autocorrelation), and if my independent variables (or predictors) have significant multicollinearity. 
+
+
+
+```{r}
+check_outlier <- function(v, coef=1.5){
+  quantiles <- quantile(v,probs=c(0.25,0.75))
+  IQR <- quantiles[2]-quantiles[1]
+  res <- v < (quantiles[1]-coef*IQR)|v > (quantiles[2]+coef*IQR)
+  return(res)
+}
+```
+
+```{r}
+LModel <- lm(formula = NewCovid2$CaseMortalityRate ~ NewCovid2$HDI*NewCovid2$FullyVac100)
+summary(LModel)
+
+ggplot() + aes(x = "", y = NewCovid2$CaseMortalityRate) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
+
+ggplot() + aes(x = "", y = NewCovid2$HDI) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
+
+
+ggplot() + aes(x = "", y = NewCovid2$FullyVac100) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()
+
+shapiro.test(studres(LModel))
+```
+
+Looking at the box plot of Case Mortality Rate, there seems to be outliers in the data, which may communicate that the data will not satisfy Normality. This is supported up by the Shapiro Wilk Test, which has a p value of $$p = 1.358 \times 10^{-10} < .05$$ 
+
+$$H_0: \text{Resiudals Normally Distributed } H_a: \text{Residuals not Normally Distributed}$$
+Hence, we reject the Null Hypothesis, that the residuals are normally distributed (Normality) in favor of the Alternative Hypothesis, that the residuals are not normally distributed. To fix this a boxcox transformation would probably be best, as well as checking if there still are outliers and potentially removing them as necessary. These two  measures will likely allow the normality assumption to be satisfied, and allow us to continue with model diagnostics. 
+
+
+
+```{r}
+NewCovid2[NewCovid2 == 0] <- NA
+NewCovid2 <- na.omit((NewCovid2)) #remove variables with 0 as to allow for boxcox
+bc <- boxcox(NewCovid2$CaseMortalityRate ~ NewCovid2$HDI*NewCovid2$FullyVac100)
+(lambda <- bc$x[which.max(bc$y)])
+new_model <- lm(((NewCovid2$CaseMortalityRate^lambda-1)/lambda) ~ NewCovid2$HDI*NewCovid2$FullyVac100)
+
+data <- ((NewCovid2$CaseMortalityRate^lambda-1)/lambda)
+outlier <- check_outlier(data)
+label <- ifelse(outlier,NewCovid2$COUNTRY,"")
+
+
+
+ggplot() + aes(x = "", y = ((NewCovid2$CaseMortalityRate^lambda-1)/lambda)) +
+  geom_boxplot(fill = "#0c4c8a") +
+  theme_minimal()+geom_text(aes(label=label),hjust=-1)
+
+plot(new_model, 1, id.n = 5)
+plot(new_model, 2, id.n = 5)
+plot(new_model, 3, id.n = 5)
+plot(new_model, 4, id.n = 5)
+plot(new_model, 5, id.n = 5)
+
+
+CorMat <- data.frame(((NewCovid2$CaseMortalityRate^lambda-1)/lambda),NewCovid2$HDI,NewCovid2$FullyVac100)
+CorMat <- cor(CorMat)
+CorMat
+findCorrelation(abs(CorMat), cutoff = 0.8, names = TRUE)
+
+
+summary(new_model)
+shapiro.test(studres(new_model))
+
+model.diag.metrics <- augment(new_model)
+model.diag.metrics %>%
+  top_n(5, wt = .cooksd)
+model.diag.metrics %>%
+  top_n(5, wt = .std.resid)
+```
+
+It seems that Normality is not satisfied yet, so the next course of action would be to remove outliers based off their cook's distances. Based off the cooks distance plot, the data points that have the highest cook distances are points 45, 77, and 151 which correspond to Yemen (with a case mortality rate of $\approx 15.9\%$), Burundi (with a case mortality rate of $\approx 0.0334\%$) and Guyana (with a case mortality rate of $\approx 1.885\%$) With regard to Yemen, it has the highest case mortality rate globally, and is an extreme outlier, not following the overall trend. With regard to Burundi, it has a very low case mortality rate compared to it's HDI (0.433) and persons fully vaccinated (0.080 out of 100), and Guyana has a fairly low case mortality rate compared to it's HDI (0.682) and persons fully vaccinated (44.467 out of 100). Hence, these data points do not follow the general trend associated with the data, and there will likely be a marked improvement in the normality of the data once these points are removed. 
+
+
+```{r}
+NewCovid2 <- NewCovid2[-c(45,77,151), ]
+bc <- boxcox(NewCovid2$CaseMortalityRate ~ NewCovid2$HDI*NewCovid2$FullyVac100)
+(lambda <- bc$x[which.max(bc$y)])
+new_model <- lm(((NewCovid2$CaseMortalityRate^lambda-1)/lambda) ~ NewCovid2$HDI*NewCovid2$FullyVac100)
+confint(new_model)
+
+CorMat <- data.frame(((NewCovid2$CaseMortalityRate^lambda-1)/lambda),NewCovid2$HDI,NewCovid2$FullyVac100)
+CorMat <- cor(CorMat)
+CorMat
+findCorrelation(abs(CorMat), cutoff = 0.9, names = TRUE)
+plot(new_model, 1, id.n = 5)
+plot(new_model, 2, id.n = 5)
+plot(new_model, 3, id.n = 5)
+plot(new_model, 4, id.n = 5)
+plot(new_model, 5, id.n = 5)
+hist(rstandard(new_model))
+summary(new_model)
+shapiro.test(studres(new_model))
+bptest(new_model)
+durbinWatsonTest(new_model)
+
+model.diag.metrics <- augment(new_model)
+model.diag.metrics %>%
+  top_n(5, wt = .cooksd)
+model.diag.metrics %>%
+  top_n(5, wt = .std.resid)
+```
+
+To reiterate, the null and alternative hypothesis for normality are as follows, $$H_0: \text{Resiudals Normally Distributed } H_a: \text{Residuals not Normally Distributed}$$
+
+Since the Shapiro-Wilk normality test has has a p-value of $p = 0.818 > .05$, we can accept the null hypothesis, and normality is now satisfied. This is supported by the Q-Q plot,  as the residuals approximately follow a normal distribution.  With Normality satisfied, the other assumptions can now be checked. 
+
+Now, we must check homoscedasticity. The null and alternative hypothesis for homoscedasticity are as follows,$$H_0: \text{constant variances in the residuals errors (homoscedasticity) } H_a: \text{non-constant variances in the residuals errors}$$
+
+Since the studentized Breusch-Pagan test has a p-value of $p = 0.1893 > .05$, we accept the null hypothesis, and homoscedasticity is satisfied. This is supported by the fact that the scale-location plot has a horizontal line with equally spread points. This is supported because in our Scale-Location plot, we have a horizontal line with equally spread points.
+
+
+Now, we must check for independence, or autocorrelation. The null and alternative hypothesis for autocorrelation are as follows,$$H_0: \text{errors are independent (no autocorrelation) } H_a: \text{errors are not independent (autocorrelation)}$$
+
+Since the Durbin-Watson test has a p-value of $p = 0.372 > .05$, we accept the null hypothesis, and independence is satisfied 
+
+Finally, I believe there is not significant correlation, or Multicollinearity in our model. Although the persons fully vaccinated (out of 100) and HDI have a correlation of 0.7954318, these two variables give different information with regard to the dependent variable, case mortality rate. For example, although how developed a nation is (HDI) is correlated with how many people are fully vaccinated (out of 100), due to people in more developed nations having better access to vaccines to begin with, the HDI also accounts for other factors such as life expectancy, years of education, and per capita income, which are related to mortality rate as countries without a high life expectancy will probably be hit harder by covid (individuals more malnourished, etc). Countries with high per capita income probably also have better access to medical devices, medicines, and overall a more robust healthcare system, all which decrease case mortality rate, something not accounted for in persons fully vaccinated (out of 100) Hence, I believe these two variables communicate some degree of differing information. Adding to this, none of the values in my correlation matrix have a correlation over .9, so they carry differing information. Both of my predictor variables have moderate correlation with the output (case mortality rate), so they should both be kept in the model. 
+
+Now, I will check if my coefficients are significant (non-zero). My $\alpha = \frac{.05}{4} = .0125$, as I need to use the Bonferroni correction and divide by the number of hypothesis tests, and my confidence interval is 95% 
+
+
+Since for $\beta_0$ $p = 0.1838 > .0125 = \alpha$ and my null and alternative hypothesis are as follows 
+$$H_0: \beta_0 \neq 0, H_a: \beta_0 = 0$$, I reject my null hypothesis in favor of the alternative, $\beta_0 = 0$
+
+Since for $\beta_1$ $p = 0.00949 < .0125 = \alpha$ and my null and alternative hypothesis are as follows 
+$$H_0: \beta_1 \neq 0, H_a: \beta_1 = 0$$, I accept my null hypothesis, $\beta_1 \neq 0$
+
+Since for $\beta_2$ $p = 8.13 \times 10 ^{-6} < .0125 = \alpha$ and my null and alternative hypothesis are as follows 
+$$H_0: \beta_2 \neq 0, H_a: \beta_2 = 0$$, I accept my null hypothesis, $\beta_2 \neq 0$
+
+Since for $\beta_{1,2}$ $p = 7.58 \times 10 ^{-9} < .0125 = \alpha$ and my null and alternative hypothesis are as follows 
+$$H_0: \beta_{1,2} \neq 0, H_a: \beta_{1,2} = 0$$, I accept my null hypothesis, $\beta_{1,2} \neq 0$
+
+This is supported by their 95% confidence intervals $$\beta_0 \in [-1.72185026,  0.33293762], \beta_1 \in  [0.56501098, 3.99811491], \beta_2 \in   [0.02977906,0.07448294], \beta_{1,2} \in [-0.12220154, -0.06234453]$$ as $\beta_0$'s contains 0 while the rest do not. 
+
+This model also has an overall p value of $p = 2.2 \times 10^{-16}$, so there is a significant relationship described by the model
+Finally, this model has $R^2 = 0.4836$, meaning that this model explains roughly half the variance in the dependent variable.
+
+The model is as follows
+
+$$\frac{\hat{Y_i}^{\lambda}-1}{\lambda} = \beta_1 X_{1_i} + \beta_2 X_{2_i} -\beta_{1,2}X_{1_i} X_{2_i} $$
+$$\frac{\hat{Y_i}^{0.1414141}-1}{0.1414141} =  2.28156 X_{1_i} + 0.05213 X_{2_i} -0.09227X_{1_i} X_{2_i} $$
+$${\hat{Y_i}^{0.1414141}} = 1+ 0.3226448 X_{1_i} + 0.0073719 X_{2_i} −0.0130483X_{1_i} X_{2_i} $$
+
+$${\hat{Y_i}^{0.1414141}} = 1+ 0.3226448 X_{1_i} + 0.0073719 X_{2_i} −0.0130483X_{1_i} X_{2_i} $$
+$$\hat{Y_i} = (1+ 0.3226448 X_{1_i} + 0.0073719 X_{2_i} −0.0130483X_{1_i} X_{2_i})^{7.07143064235}$$
+
+ with $\hat{Y}$ being case mortality rate (as %), $X_1$ being  $HDI$ and $X_2$ being persons fully vaccinated (out of 100).                        
+Below is a dot plot of the data,
+```{r}
+CovidCumulative <- NewCovid2 %>% arrange(desc(CaseMortalityRate))%>% 
+mutate(COUNTRY= factor(COUNTRY)) %>%
+mutate(text = paste("Country: ", COUNTRY, "\nPersons Fully Vaccinated (per 100 population): ", FullyVac100, "\nCumulative Cases (per 100000 pop): ", NormCase, "\nNew Deaths in last 7 Days (per 100000 pop): ", NormDeath, "\nCase Mortality Rate: ", CaseMortalityRate ,"\nHDI:", HDI,"\nPopulation:", `Pop`, sep="")) %>%
+  
+
+  
+ggplot(aes(x=HDI, y = ((NewCovid2$CaseMortalityRate^lambda-1)/lambda), size = FullyVac100, color = WHO_REGION, text = text)) +
+geom_point(alpha=0.5) +
+scale_size(range = c(.1, 7), name="Persons Fully Vaccinated (per 100 population)")+
+theme(legend.position="right") +
+ylab("boxcox(Case Mortality Rate (as %))") +
+xlab("HDI") +
+scale_colour_viridis_d(option = "turbo")  
+
+
+CovidCumulativeInteractive <- ggplotly(CovidCumulative, tooltip = "text")
+CovidCumulativeInteractive
+```
+
+Overall, based off this model we can conclude that around half of the variance in the predictor variable is based on how many people are fully vaccinated (out of 100), and the HDI of the country being looked at. Hence, this confirms that Covid in the past year or so has hit underdeveloped nations, and nations without access to vaccinations the hardest. This is important because guaranteeing a better living standard, and sharing vaccines with impoverished nations can significantly decrease their case mortality rate, and save lives. Next, I will compare the case mortality rate of each World Health Organization Region, which may support this idea. 
+
+**MODEL EXPLORATION: ANOVA, CASE MORTALITY RATE, AND PERSONS FULLY VACCINATED (OUT OF 100)**
+```{r}
+
+boxcoxCaseMortalityRate <- ((NewCovid2$CaseMortalityRate^lambda-1)/lambda)
+WHO_REGION <- as.factor(NewCovid2$WHO_REGION)
+data <- data.frame(boxcoxCaseMortalityRate,WHO_REGION)
+
+new_model_AOV <- aov(boxcoxCaseMortalityRate~WHO_REGION)
+
+
+
+p <- ggplot(data, aes(x=WHO_REGION, y=boxcoxCaseMortalityRate, fill=WHO_REGION)) + 
+  geom_boxplot() + labs(title="Plot of length  per dose",x="Dose (mg)", y = "Length")
+p
+
+
+
+summary(new_model_AOV)
+bptest(new_model_AOV)
+shapiro.test(studres(new_model_AOV))
+plot(new_model_AOV,1)
+plot(new_model_AOV,2)
+plot(new_model_AOV,3)
+plot(new_model_AOV,4)
+plot(new_model_AOV,5)
+plot(new_model_AOV,6)
+hist(boxcoxCaseMortalityRate)
+```
+
+My ANOVA is a model of $$\frac{\hat{y_{ij}}^{\lambda}-1}{\lambda} = \mu_{j}+ e_{ij}$$ 
+
+Where  $y_{ij}$ is the real valued response for the ith subject of the jth factor level, $\mu_j$ is the population mean of the jth factor level, and $e_{ij} \sim N(0,\sigma^2)$ An Anova model allows us to determine if there is a difference in the means of different factors, in this case we are interested in seeing if there is a difference in the mean case mortality rate by WHO Region. 
+
+I am using the same box-cox transformation I used in my first model, as it seems to normalize the predictor variable, as shown by the histogram above. 
+
+For this model, we need to check the assumptions of homoscedasticity (homogeneity of variance), normality, and independence. 
+
+For my ANOVA Model, my Breusch-Pagan test has a p value of $p = 0.00492 < .05 = \alpha$ so it does not satisfy homoscedasticity (homogeneity of variance). However the p value of the shapiro test is $p = 0.7646 > .05= \alpha$ so the model is normal (satisfies normality). Hence, I can use a Welches Anova which assumes Normality but not homoscedasticity. I will also assume independence of observations, as one regions case mortality rate should not affect anthers. 
+
+```{r}
+new_model_welch <- oneway.test(boxcoxCaseMortalityRate~WHO_REGION)
+new_model_welch
+```
+Because the p-value of my Welch Anova is $p  = 8.177\times 10^{-6} < .05 = \alpha$, I can assume that there is a difference in means between groups. To figure out what means differ, I will use a Games-Howell Test. 
+
+```{r}
+games_howell_test(data, boxcoxCaseMortalityRate~WHO_REGION ,conf.level = 0.95, detailed = FALSE)
+```
+
+Based upon my Games-Howell Test, there is a significant difference in the means of Europe and Africa, the Western Pacific and Africa, Europe and the Americas, and the West Pacific and the Americas. In particular, the 95% Confidence interval in the difference of the means of Europe and Africa is $[-1.3880957,	-0.4114904]$, the 95% Confidence interval in the difference of the means of the Western Pacific and Africa is $[-1.8808796,	-0.2556291]$, the 95% Confidence interval in the difference of the means of the Europe and the Americas is $[-1.4422163	-0.3829553]$ and, the 95% Confidence interval in the difference of the means of the West Pacific and the Americas is $[-1.9139549, -0.2481394]$.
+
+This communicates that Africa has a significantly larger Mortality Rate than Europe, the Americas has a significantly larger mortality rate than Europe, Africa has a significantly larger Mortality Rate than the West Pacific and the Americas has a significantly larger mortality rate than the West Pacific. This is significant because, coupled with the linear model fitted from earlier, it seems very likely that more developed regions (such as Europe and the West Pacific), have markedly lower case mortality rates than regions that are less developed overall (such as the Americas as a whole, and Africa). With this knowledge, we should give/offer vaccinations to less developed parts of the world to prevent more deaths, and decrease their case mortality rates. 
+
+***CONCLUSION***
+
+Overall, through exploring the data and using different models we were able to get a lot of insight into mechanisms of the covid pandemic, in regard to case mortality rate. Through fitting a linear regression model with BoxCox of Case Mortality Rate against HDI and Persons Fully Vaccinated (out of 100), we learned these two explanatory variables, and their interaction terms can explain around half the variance in the predictor variable. This communicated that how developed a country is, along with how many persons out of 100 are fully vaccinated, significantly changes the case mortality rate, as having a higher HDI and higher persons fully vaccinated out of 100 results in a lower case mortality rate. 
+
+The secondary model is an ANOVA model comparing each WHO's region case mortality rate, as transformed by the same BoxCox in the linear regression model. This model communicated that both Europe and the West Pacific have a markedly lower case mortality rate than that both of the Americas and Africa. This ties into the first model as Europe and the West Pacific are generally higher developed regions, with more persons fully vaccinated overall than the Americas and Africa. With this knowledge, we should give excess vaccines to underdeveloped regions, such as Africa, do prevent deaths and eventually decrease their case mortality rate. 
+
+Some Caveats with this model is that the HDI is from 2020, and population that I used to normalize the Cumulative Deaths and Cases is from 2019, although these likely are not significant enough stressors to dampen my models accuracy, as the HDI of nations and their population likely were quite similar between 2020 and 2022 (they don't change much). My cumulative cases and cumulative deaths also are from March 1st of 2021 to March 1st of 2022, as the former date I felt was a good predictor of when most countries started offering vaccinations for COVID-19, so this should only be limited to that time frame. This model also assumes integrity and honestly in reporting covid case and death numbers, along with the capability to do so in the first place. Further analysis of the relationship between the ability to report cases, and how developed a nation is would be good, as it would help us understand if underdeveloped nations have less of a capability to report cases and deaths. Finally, the persons fully vaccinated (out of 100) is the most up to date one for each nation, and most definitely changed over the course of a year, which decreased the case mortality rate as persons fully vaccinated out of 100 increased. However, a better, more thorough analysis would require better data, as in how persons fully vaccinated changed over time, as the model is likely very sensitive to it changing. 
+
+```{r}
+sessionInfo()
+```
